@@ -12,6 +12,7 @@ import json
 import base64
 import zipfile
 import mimetypes
+import time
 from datetime import datetime
 
 import streamlit as st
@@ -35,7 +36,7 @@ EXTRACTION_PROMPT = """你是一个财务票据识别助手。请仔细查看这
 """
 
 
-def call_gemini(file_bytes: bytes, mime_type: str, api_key: str) -> dict:
+def call_gemini(file_bytes: bytes, mime_type: str, api_key: str, max_retries: int = 3) -> dict:
     data = base64.standard_b64encode(file_bytes).decode("utf-8")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={api_key}"
     body = {
@@ -49,14 +50,27 @@ def call_gemini(file_bytes: bytes, mime_type: str, api_key: str) -> dict:
         ],
         "generationConfig": {"response_mime_type": "application/json"},
     }
-    resp = requests.post(url, json=body, timeout=120)
-    resp.raise_for_status()
-    raw_text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-    raw_text = re.sub(r"^```json|```$", "", raw_text, flags=re.MULTILINE).strip()
-    try:
-        return json.loads(raw_text)
-    except json.JSONDecodeError:
-        return {"date": "unknown", "amount": "0", "currency": "unknown", "merchant": "unknown"}
+
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            resp = requests.post(url, json=body, timeout=120)
+            resp.raise_for_status()
+            raw_text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+            raw_text = re.sub(r"^```json|```$", "", raw_text, flags=re.MULTILINE).strip()
+            try:
+                return json.loads(raw_text)
+            except json.JSONDecodeError:
+                return {"date": "unknown", "amount": "0", "currency": "unknown", "merchant": "unknown"}
+        except requests.exceptions.HTTPError as e:
+            last_error = e
+            # 503(服务器暂时过载) 和 429(请求太快) 值得重试；其他错误(如401/404)重试也没用，直接抛出
+            if resp.status_code in (503, 429) and attempt < max_retries - 1:
+                time.sleep(3 * (attempt + 1))  # 等待时间逐次增加：3秒、6秒...
+                continue
+            raise
+
+    raise last_error
 
 
 def sanitize(s) -> str:
