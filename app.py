@@ -159,7 +159,9 @@ if uploaded_files and st.button(f"开始处理 {len(uploaded_files)} 个文件",
 
             rows.append([date_str, amount_str, currency, merchant, uf.name, new_name,
                          datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
-
+            
+            if i < len(uploaded_files) - 1:
+                time.sleep(2)
         progress.progress(1.0, text="生成Excel台账...")
         zf.writestr("报销台账.xlsx", build_excel(rows))
 
